@@ -1,8 +1,31 @@
-- name: Apply HyperOS Patches & Find Config
+name: Xiaomi 11T Pro Next-Gen HyperOS Kernel
+
+on:
+  push:
+    branches: [ main, master, lineage-23.2 ]
+  workflow_dispatch:
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Initialize & Clone Latest Source
+        run: |
+          git clone --depth=1 https://github.com/Spanish-or-Vanish/kernel_xiaomi_sm8350.git kernel_source
+          cd kernel_source
+          rm -rf .git
+
+      - name: Setup Toolchain & Dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            build-essential libncurses5-dev bison flex bc git libssl-dev wget zip cpio python3
+          
+          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+
+      - name: Apply HyperOS Patches & Find Config
         run: |
           cd kernel_source
           
-          # Find any file ending with defconfig that matches vili or a similar pattern
           CONFIG_FILE=$(find arch/arm64/configs -name "*defconfig" | grep -E "vili|sm8350|kona" | head -n 1)
           if [ -z "$CONFIG_FILE" ]; then
             CONFIG_FILE=$(find arch/arm64/configs -name "*defconfig" | head -n 1)
@@ -12,7 +35,6 @@
           CONFIG_NAME=$(basename "$CONFIG_FILE")
           echo "CONFIG_NAME=$CONFIG_NAME" >> $GITHUB_ENV
           
-          # Injecting HyperOS / MIUI hooks
           echo "CONFIG_MIUI_CAMERA=y" >> "$CONFIG_FILE"
           echo "CONFIG_SND_SOC_MSM_SDW=y" >> "$CONFIG_FILE"
           echo "CONFIG_BINDER_IPC_SYSTEM_HEAP=y" >> "$CONFIG_FILE"
@@ -37,3 +59,29 @@
             CROSS_COMPILE=aarch64-linux-gnu- \
             LOCALVERSION="-HyperOS-Vili-NextGen" \
             Image.gz dtbo.img
+
+      - name: Build AnyKernel3 Flashable Zip
+        run: |
+          cd kernel_source
+          
+          mkdir -p ../final_build
+          if [ -f out/arch/arm64/boot/Image.gz ]; then
+            cp out/arch/arm64/boot/Image.gz ../final_build/
+          fi
+          if [ -f out/arch/arm64/boot/dtbo.img ]; then
+            cp out/arch/arm64/boot/dtbo.img ../final_build/
+          fi
+          
+          cd ..
+          git clone https://github.com/osm0sis/AnyKernel3.git ak3
+          rm -rf ak3/.git
+          cp final_build/* ak3/ || true
+          
+          cd ak3
+          zip -r ../Xiaomi-11T-Pro-HyperOS-NextGen-Kernel.zip *
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Xiaomi-11T-Pro-HyperOS-NextGen-Kernel
+          path: Xiaomi-11T-Pro-HyperOS-NextGen-Kernel.zip
