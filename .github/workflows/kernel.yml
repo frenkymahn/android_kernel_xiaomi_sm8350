@@ -1,0 +1,102 @@
+name: Xiaomi 11T Pro HyperOS Kernel Builder
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout and Clean Clone
+        run: |
+          rm -rf .git* || true
+          git clone --depth=1 https://github.com/Spanish-or-Vanish/kernel_xiaomi_sm8350.git source_tmp
+          shopt -s dotglob
+          mv source_tmp/* .
+          rm -rf source_tmp .gitmodules || true
+
+      - name: Setup Build Environment & Dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            build-essential libncurses5-dev bison flex bc git libssl-dev wget zip cpio python3 python3-pip
+          
+          sudo ln -sf /usr/bin/python3 /usr/bin/python
+          sudo ln -sf /usr/bin/python3 /usr/bin/python2
+          
+          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+
+      - name: Inject Full HyperOS/MIUI & OEM Configurations
+        run: |
+          # Automatically find vili defconfig
+          CONFIG_FILE=$(find arch/arm64/configs -name "*vili*_defconfig" | head -n 1)
+          if [ -z "$CONFIG_FILE" ]; then
+            CONFIG_FILE="arch/arm64/configs/vili_defconfig"
+          fi
+          
+          echo "Using config file: $CONFIG_FILE"
+          echo "CONFIG_DEFCONFIG_PATH=$CONFIG_FILE" >> $GITHUB_ENV
+
+          if [ -f "$CONFIG_FILE" ]; then
+            echo "Injecting full HyperOS/MIUI compatibility hooks..."
+            # Essential HyperOS/MIUI configurations for camera, audio, and vendor blobs
+            echo "CONFIG_MIUI_CAMERA=y" >> "$CONFIG_FILE"
+            echo "CONFIG_SND_SOC_MSM_SDW=y" >> "$CONFIG_FILE"
+            echo "CONFIG_MSM_ دوربین_SUPPORT=y" >> "$CONFIG_FILE"
+            echo "CONFIG_INPUT_TOUCHSCREEN=y" >> "$CONFIG_FILE"
+            echo "CONFIG_MMC_SDHCI_MSM=y" >> "$CONFIG_FILE"
+          fi
+
+          # Fix architecture flags to prevent compilation errors
+          MAKEFILE_PATH="arch/arm64/Makefile"
+          if [ -f "$MAKEFILE_PATH" ]; then
+            sed -i 's/-mcpu=cortex-a78.cortex-a55+crypto+crc/-mcpu=cortex-a78/g' "$MAKEFILE_PATH" || true
+          fi
+
+      - name: Compile Kernel for HyperOS
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          
+          export KBUILD_BUILD_USER="frenkymahn"
+          export KBUILD_BUILD_HOST="frenkymahn-PC"
+          
+          export PATH=/usr/bin:$PATH
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC=aarch64-linux-gnu-gcc
+          export LD=aarch64-linux-gnu-ld
+          
+          CONFIG_NAME=$(basename ${{ env.CONFIG_DEFCONFIG_PATH }})
+          
+          mkdir -p out
+          make O=out $CONFIG_NAME
+          
+          make -j$(nproc) O=out \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            LOCALVERSION="-HyperOS_Vili_DarkKernel" \
+            Image.gz dtbo.img
+
+      - name: Package with AnyKernel3
+        run: |
+          mkdir -p final_images
+          if [ -f out/arch/arm64/boot/Image.gz ]; then
+            cp out/arch/arm64/boot/Image.gz final_images/
+          fi
+          if [ -f out/arch/arm64/boot/dtbo.img ]; then
+            cp out/arch/arm64/boot/dtbo.img final_images/
+          fi
+
+          git clone https://github.com/osm0sis/AnyKernel3.git ak3
+          rm -rf ak3/.git
+          cp final_images/* ak3/ || true
+          cd ak3 && zip -r ../Xiaomi-11T-Pro-HyperOS-DarkKernel.zip * && cd ..
+
+      - name: Upload HyperOS Kernel Zip Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Xiaomi-11T-Pro-HyperOS-Kernel-Zip
+          path: |
+            final_images/*
+            Xiaomi-11T-Pro-DarkKernel.zip
+            Xiaomi-11T-Pro-HyperOS-DarkKernel.zip
